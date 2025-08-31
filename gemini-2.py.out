@@ -1,0 +1,6 @@
+
+Analyzing outcome: PTB
+AUC-ROC on Validation Set for PTB: 0.3900
+
+Analyzing outcome: EarlyPTB
+AUC-ROC on Validation Set for EarlyPTB: 0.5607

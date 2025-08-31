@@ -1,0 +1,29 @@
+/home/ay6621/LLMProjCode2/phi4-2.py:20: DeprecationWarning: DataFrameGroupBy.apply operated on the grouping columns. This behavior is deprecated, and in a future version of pandas the grouping columns will be excluded from the operation. Either pass `include_groups=False` to exclude the groupings or explicitly select the grouping columns after groupby to silence this warning.
+  filtered = data[data['collect_wk'] < 32].groupby('participant_id').apply(
+/home/ay6621/LLMProjCode2/phi4-2.py:20: DeprecationWarning: DataFrameGroupBy.apply operated on the grouping columns. This behavior is deprecated, and in a future version of pandas the grouping columns will be excluded from the operation. Either pass `include_groups=False` to exclude the groupings or explicitly select the grouping columns after groupby to silence this warning.
+  filtered = data[data['collect_wk'] < 32].groupby('participant_id').apply(
+Traceback (most recent call last):
+  File "/home/ay6621/LLMProjCode2/phi4-2.py", line 45, in <module>
+    model.fit(X_train, y_train)
+  File "/usr/local/lib64/python3.11/site-packages/sklearn/base.py", line 1351, in wrapper
+    return fit_method(estimator, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib64/python3.11/site-packages/sklearn/linear_model/_logistic.py", line 1201, in fit
+    X, y = self._validate_data(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib64/python3.11/site-packages/sklearn/base.py", line 650, in _validate_data
+    X, y = check_X_y(X, y, **check_params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib64/python3.11/site-packages/sklearn/utils/validation.py", line 1192, in check_X_y
+    X = check_array(
+        ^^^^^^^^^^^^
+  File "/usr/local/lib64/python3.11/site-packages/sklearn/utils/validation.py", line 951, in check_array
+    array = _asarray_with_order(array, order=order, dtype=dtype, xp=xp)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib64/python3.11/site-packages/sklearn/utils/_array_api.py", line 521, in _asarray_with_order
+    array = numpy.asarray(array, order=order, dtype=dtype)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib64/python3.11/site-packages/pandas/core/generic.py", line 2153, in __array__
+    arr = np.asarray(values, dtype=dtype)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: could not convert string to float: 'A'

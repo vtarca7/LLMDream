@@ -1,0 +1,2 @@
+AUC ROC for PTB model (delivery_wk < 37): 0.5666667 
+AUC ROC for EarlyPTB model (delivery_wk < 32): 0.5868852 

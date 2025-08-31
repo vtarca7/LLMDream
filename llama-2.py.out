@@ -1,0 +1,9 @@
+Traceback (most recent call last):
+  File "/home/ay6621/LLMProjCode2/llama-2.py", line 14, in <module>
+    train_features = train_features[common_features]
+                     ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib64/python3.11/site-packages/pandas/core/frame.py", line 4063, in __getitem__
+    check_dict_or_set_indexers(key)
+  File "/usr/local/lib64/python3.11/site-packages/pandas/core/indexing.py", line 2774, in check_dict_or_set_indexers
+    raise TypeError(
+TypeError: Passing a set as an indexer is not supported. Use a list instead.

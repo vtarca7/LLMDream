@@ -1,0 +1,4 @@
+Error encountered: llama-2.R:39:14: unexpected symbol
+38: # Create model and predict
+39: model <- glm PTB
+                 ^ 

@@ -1,0 +1,9 @@
+Traceback (most recent call last):
+  File "/home/ay6621/LLMProjCode2/phi4-1.py", line 118, in <module>
+    main()
+  File "/home/ay6621/LLMProjCode2/phi4-1.py", line 79, in main
+    download_gse_data(gse_id)
+  File "/home/ay6621/LLMProjCode2/phi4-1.py", line 22, in download_gse_data
+    with gzip.open(f'{gse_id}.soft', 'rt') as f:
+         ^^^^
+NameError: name 'gzip' is not defined. Did you mean: 'zip'?
