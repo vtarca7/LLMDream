@@ -1,0 +1,102 @@
+Below is an example R script that reads in the training and test feature data and metadata, reshapes the data so that rows correspond to samples (with features as columns), fits a ridge‐regression model (using glmnet’s cross‐validation to select the tuning parameter), computes the RMSE on the test set, and makes a scatter plot of predicted versus actual gestational age (GA) with the RMSE included in the plot caption.
+
+Please adjust file paths and any column names if your files differ.
+
+--------------------------------------------------
+# Begin R Code
+
+# Load required libraries
+library(glmnet)   # For penalized regression in high dimensions
+library(ggplot2)  # For plotting
+
+# -----------------------------
+# 1. Load and reshape the training data
+
+# Read the training feature data (rows: features, columns: samples; first column = feature names)
+df_train <- read.csv("df_training.csv", check.names = FALSE, stringsAsFactors = FALSE)
+
+# Separate the feature names from the feature values
+# (Assuming the first column contains feature names)
+features_train <- df_train[ , -1]    
+rownames(features_train) <- df_train[ , 1]
+
+# Transpose so that rows = samples and columns = features
+x_train <- t(features_train)
+x_train <- as.matrix(x_train)   # Convert to matrix
+
+# Read the training metadata (must contain Sample_ID and GA columns)
+metadata_train <- read.csv("ano_training.csv", stringsAsFactors = FALSE)
+
+# Ensure that the samples in the feature matrix and metadata match.
+# Get common sample IDs:
+common_train_samples <- intersect(rownames(x_train), metadata_train$Sample_ID)
+
+# Subset training data (keeping the same order)
+x_train <- x_train[common_train_samples, ]
+# Match the sample order to that in x_train; we assume “GA” contains gestational age.
+y_train <- metadata_train$GA[match(common_train_samples, metadata_train$Sample_ID)]
+
+# -----------------------------
+# 2. Load and reshape the test data
+
+# Read the test feature data
+df_test <- read.csv("df_test.csv", check.names = FALSE, stringsAsFactors = FALSE)
+features_test <- df_test[ , -1]
+rownames(features_test) <- df_test[ , 1]
+x_test <- t(features_test)
+x_test <- as.matrix(x_test)
+
+# Read the test metadata
+metadata_test <- read.csv("ano_test.csv", stringsAsFactors = FALSE)
+common_test_samples <- intersect(rownames(x_test), metadata_test$Sample_ID)
+x_test <- x_test[common_test_samples, ]
+y_test <- metadata_test$GA[match(common_test_samples, metadata_test$Sample_ID)]
+
+# -----------------------------
+# 3. Fit a predictive model using glmnet (ridge regression here)
+
+set.seed(123)   # For reproducibility
+# Using ridge regression (alpha=0); cv.glmnet will perform cross-validation to choose lambda.
+cv_fit <- cv.glmnet(x_train, y_train, alpha=0)
+
+# Extract the best lambda (minimizes cross-validation error)
+best_lambda <- cv_fit$lambda.min
+
+# -----------------------------
+# 4. Predict on the test set and compute RMSE
+
+predictions <- predict(cv_fit, s = best_lambda, newx = x_test)
+predictions <- as.vector(predictions)   # Convert predictions to a vector
+
+# Compute RMSE:
+rmse <- sqrt(mean((predictions - y_test)^2))
+print(paste("Test RMSE:", round(rmse, 4)))
+
+# -----------------------------
+# 5. Generate a scatter plot of predicted vs actual GA values
+
+plot_data <- data.frame(Predicted = predictions, Actual = y_test)
+
+p <- ggplot(plot_data, aes(x = Predicted, y = Actual)) +
+  geom_point(color = "blue", alpha = 0.6) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "red") +
+  labs(title = "Predicted vs Actual Gestational Age",
+       x = "Predicted GA",
+       y = "Actual GA",
+       caption = paste("Test RMSE =", round(rmse, 4))) +
+  theme_minimal()
+
+print(p)
+
+# End of script
+--------------------------------------------------
+
+Explanation of key steps:
+
+1. The training and test feature CSVs are read and then transposed (from “features as rows” to “samples as rows”) so that they can be used directly in glmnet.
+2. The metadata files (ano_training.csv and ano_test.csv) are read and merged with the feature data via the Sample_ID.
+3. A ridge regression model (using alpha = 0 in cv.glmnet) is fit to predict gestational age (GA) from the methylation features.
+4. The RMSE on the test set is computed and printed.
+5. A scatter plot of predicted vs actual GA is produced with a dashed 45° reference line (to show perfect prediction) and the RMSE added in the caption.
+
+This code should serve as a self‐contained example.

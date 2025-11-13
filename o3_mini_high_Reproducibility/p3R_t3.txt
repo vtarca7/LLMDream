@@ -1,0 +1,140 @@
+Below is one complete R script that implements the requested analyses. In this example we use a lasso‐penalized logistic regression model via glmnet and evaluate performance on the test set using the pROC package. (You may need to install the packages “dplyr”, “glmnet” and “pROC” if you haven’t already.) 
+
+The script first reads in the species abundance (microbial features) and metadata files. It then discards features that are not common between training and validation sets. Next, for each analysis the code (a) merges species data with metadata (joined by the “specimen” column); (b) filters to include only records whose collection week is less than a given threshold (collect_wk < 32 or < 28), and then (c) for each participant selects the observation with the highest collect_wk (i.e. the “last” specimen meeting that criterion). Finally, the outcome is defined based solely on delivery_wk (delivery_wk < 37 for PTB and delivery_wk < 32 for EarlyPTB), a predictive model is fit using only the common microbial features, and the ROC AUC is computed and plotted on the test set.
+
+You can run the following R code:
+
+------------------------------------------------------------
+# R script for predicting PTB and EarlyPTB from microbiome data
+
+# Load required packages
+library(dplyr)
+library(glmnet)
+library(pROC)
+
+# -----------------------------
+# Read in species abundance and metadata files
+# -----------------------------
+# Species abundance files have a "specimen" column and ~2000 microbial features.
+train_species <- read.csv("training_species_abundance.csv", stringsAsFactors = FALSE)
+test_species  <- read.csv("validation_species_abundance.csv", stringsAsFactors = FALSE)
+
+# Identify feature (microbial) columns (discard "specimen")
+features_train <- setdiff(colnames(train_species), "specimen")
+features_test  <- setdiff(colnames(test_species), "specimen")
+common_features <- intersect(features_train, features_test)
+cat("Number of common microbial features:", length(common_features), "\n")
+
+# Read metadata files which include specimen, participant_id, collect_wk, delivery_wk, etc.
+train_metadata <- read.csv("training_metadata.csv", stringsAsFactors = FALSE)
+test_metadata  <- read.csv("validation_metadata.csv", stringsAsFactors = FALSE)
+
+# Merge species abundance data with metadata (by the "specimen" column)
+train_full <- inner_join(train_metadata, train_species, by = "specimen")
+test_full  <- inner_join(test_metadata, test_species, by = "specimen")
+
+
+# =================================================
+# Analysis 1: Predict PTB (delivery_wk < 37)
+# Use for each participant the record with highest collect_wk < 32.
+# =================================================
+
+# Filter to specimens with collect_wk < 32 and for each participant use the record 
+# with the highest collect_wk.
+train_ptb <- train_full %>%
+  filter(collect_wk < 32) %>%
+  group_by(participant_id) %>%
+  slice_max(collect_wk, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+test_ptb <- test_full %>%
+  filter(collect_wk < 32) %>%
+  group_by(participant_id) %>%
+  slice_max(collect_wk, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+# Create PTB outcome: 1 if delivery_wk < 37, 0 otherwise.
+train_ptb$PTB <- as.numeric(train_ptb$delivery_wk < 37)
+test_ptb$PTB  <- as.numeric(test_ptb$delivery_wk < 37)
+
+# Extract the common microbial features into matrices (only features, not metadata)
+X_train <- as.matrix(train_ptb[, common_features])
+y_train <- train_ptb$PTB
+
+X_test  <- as.matrix(test_ptb[, common_features])
+y_test  <- test_ptb$PTB
+
+# Fit a lasso logistic regression model using cross-validation.
+set.seed(123)  # For reproducibility
+cv_fit <- cv.glmnet(x = X_train, y = y_train, family = "binomial", alpha = 1)
+
+# Predict probabilities on the test set using the lambda minimizing CV error.
+pred_probs <- predict(cv_fit, newx = X_test, s = "lambda.min", type = "response")
+
+# Evaluate performance using ROC and AUC.
+roc_obj <- roc(response = y_test, predictor = as.vector(pred_probs))
+auc_value <- auc(roc_obj)
+cat("PTB model AUC:", auc_value, "\n")
+
+# Plot ROC curve for PTB analysis.
+plot(roc_obj, main = paste("ROC Curve for PTB Prediction (AUC =", round(auc_value, 3), ")"))
+
+
+# =================================================
+# Analysis 2: Predict EarlyPTB (delivery_wk < 32)
+# Use for each participant the last specimen with collect_wk < 28.
+# =================================================
+
+# Filter specimens with collect_wk < 28 and for each participant use the record 
+# with the highest collect_wk.
+train_early <- train_full %>%
+  filter(collect_wk < 28) %>%
+  group_by(participant_id) %>%
+  slice_max(collect_wk, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+test_early <- test_full %>%
+  filter(collect_wk < 28) %>%
+  group_by(participant_id) %>%
+  slice_max(collect_wk, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+# Create EarlyPTB outcome: 1 if delivery_wk < 32, 0 otherwise.
+train_early$EarlyPTB <- as.numeric(train_early$delivery_wk < 32)
+test_early$EarlyPTB  <- as.numeric(test_early$delivery_wk < 32)
+
+# Extract microbial features.
+X_train_early <- as.matrix(train_early[, common_features])
+y_train_early <- train_early$EarlyPTB
+
+X_test_early  <- as.matrix(test_early[, common_features])
+y_test_early  <- test_early$EarlyPTB
+
+# Fit lasso logistic regression.
+set.seed(123)
+cv_fit_early <- cv.glmnet(x = X_train_early, y = y_train_early,
+                          family = "binomial", alpha = 1)
+
+# Predict probabilities on the test set.
+pred_probs_early <- predict(cv_fit_early, newx = X_test_early, s = "lambda.min",
+                            type = "response")
+
+# Evaluate ROC and compute AUC.
+roc_obj_early <- roc(response = y_test_early, predictor = as.vector(pred_probs_early))
+auc_value_early <- auc(roc_obj_early)
+cat("EarlyPTB model AUC:", auc_value_early, "\n")
+
+# Plot ROC curve for EarlyPTB analysis.
+plot(roc_obj_early,
+     main = paste("ROC Curve for EarlyPTB Prediction (AUC =", round(auc_value_early, 3), ")"))
+------------------------------------------------------------
+
+Notes on the code:
+1. The script first computes the intersection of microbial feature names between training and test sets (discarding “specimen”).
+2. It then merges the species abundance data with metadata by the “specimen” column.
+3. For PTB, only records with collect_wk < 32 are used and the one with the highest collect_wk per participant is selected.
+4. For EarlyPTB, the filtering is based on collect_wk < 28 and the outcome is defined as delivery_wk < 32.
+5. We use glmnet for a regularized logistic regression (with lasso penalty, i.e. alpha = 1).
+6. The pROC package is used to compute and plot the ROC curves and AUC values for both analyses.
+
+You can modify the model fitting (e.g., using elastic-net or random forests) or the filtering details as needed.

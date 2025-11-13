@@ -1,0 +1,155 @@
+Below is one complete Python script that downloads the GSE149440 data from GEO (using the GEOparse package), extracts the “gestational age” and “train” metadata from each sample, builds an expression‐by‐sample matrix, splits samples into training (train: ch1 == "1") and test sets (train: ch1 == "0"), fits a Ridge regression model to predict gestational age, prints the test-set RMSE, and makes a scatter plot of predicted versus actual gestational age. (Before running the code, be sure to install the required packages, e.g. via “pip install GEOparse scikit‑learn matplotlib pandas”.)
+
+------------------------------------------------------------
+#!/usr/bin/env python
+"""
+This script downloads the Gene Expression Omnibus dataset GSE149440,
+extracts gene expression (tens of thousands of genes) together with the
+sample metadata, and uses only the training set (defined by metadata “train: ch1 == '1'”) 
+to fit a prediction model of gestational age (extracted from metadata “gestational age: ch1”).
+Finally the model is applied on the test set (samples with train: ch1 == '0'),
+the RMSE is printed, and a scatter plot of predicted vs actual gestational age is generated.
+"""
+
+import GEOparse         # to download and parse GEO data
+import pandas as pd
+import numpy as np
+import re
+import math
+import matplotlib.pyplot as plt
+
+from sklearn.linear_model import Ridge
+from sklearn.metrics import mean_squared_error
+
+def parse_sample_metadata(gse):
+    """
+    For each sample in the GEO Series (gse), look in the GSM metadata field
+    (usually stored under the key "characteristics_ch1") to extract:
+       - gestational age (assumed to appear as a string like 'gestational age: 14' 
+         possibly with extra text)
+       - a training label (assumed to appear as 'train: 1' or 'train: 0')
+       
+    Returns a DataFrame indexed by sample (GSM) id with columns 'gestational_age' and 'train'.
+    """
+    samples_list = []
+    for gsm_id, gsm in gse.gsms.items():
+        sample_info = {"gsm_id": gsm_id}
+        # Get the list of characteristics for this sample.
+        # (If not present, returns an empty list.)
+        chars = gsm.metadata.get("characteristics_ch1", [])
+        for char in chars:
+            char_lower = char.lower()
+            if "gestational age" in char_lower:
+                # Expect a string like "gestational age: 14" or "gestational age: 14 weeks".
+                # We split on ":" and then use a regular expression to extract the number.
+                parts = char.split(":")
+                if len(parts) >= 2:
+                    age_str = parts[1].strip()
+                    m = re.search(r"[\d.]+", age_str)
+                    if m:
+                        try:
+                            sample_info["gestational_age"] = float(m.group())
+                        except:
+                            sample_info["gestational_age"] = np.nan
+                    else:
+                        sample_info["gestational_age"] = np.nan
+            elif "train" in char_lower:
+                # Expect a string like "train: 1" or "train: 0"
+                parts = char.split(":")
+                if len(parts) >= 2:
+                    sample_info["train"] = parts[1].strip()
+        samples_list.append(sample_info)
+    meta_df = pd.DataFrame(samples_list).set_index("gsm_id")
+    return meta_df
+
+def main():
+    # Step 1. Download the GEO dataset.
+    print("Downloading dataset GSE149440 from GEO ...")
+    # The "how='quick'" option downloads the processed series matrix file if available.
+    gse = GEOparse.get_GEO("GSE149440", destdir="GSE149440_data", how="quick")
+    print("Download complete.")
+
+    # Step 2. Parse sample metadata to get gestational age and training designation.
+    print("Parsing sample metadata ...")
+    meta_df = parse_sample_metadata(gse)
+    # Some samples might be missing one of these values; drop those.
+    meta_df = meta_df.dropna(subset=["gestational_age", "train"])
+    print("Found metadata for {} samples.".format(meta_df.shape[0]))
+    
+    # Step 3. Extract expression data.
+    # GEOparse can “pivot” the expression values from the series matrix file.
+    # Note that pivot_samples('VALUE') returns a DataFrame whose rows are gene (or probe) identifiers,
+    # and whose columns are sample IDs. We will transpose so that rows represent samples.
+    print("Extracting gene expression data ...")
+    expr_df = gse.pivot_samples("VALUE")
+    # Transpose: now each row is a sample and each column is a gene.
+    expr_df = expr_df.T
+
+    # Merge metadata with expression data (inner join on the GSM id index).
+    data_df = meta_df.join(expr_df, how="inner")
+    print("Merged dataset has {} samples and {} features (genes).".format(data_df.shape[0],
+          data_df.shape[1] - 2))  # exclude the two metadata columns
+
+    # Identify feature columns (all columns except the metadata variables).
+    features = data_df.columns.difference(["gestational_age", "train"])
+
+    # Step 4. Split into training and test sets. The convention here is:
+    #   training set: samples where the metadata 'train' equals "1"
+    #   test set: samples where the metadata 'train' equals "0"
+    train_data = data_df[data_df["train"] == "1"]
+    test_data = data_df[data_df["train"] == "0"]
+    
+    if train_data.empty or test_data.empty:
+        print("Check error: Either training or test set is empty!")
+        return
+
+    X_train = train_data[features].astype(float).values
+    y_train = train_data["gestational_age"].values
+    X_test = test_data[features].astype(float).values
+    y_test = test_data["gestational_age"].values
+
+    print("Training samples: {}, Test samples: {}".format(X_train.shape[0], X_test.shape[0]))
+
+    # Step 5. Fit a regression model.
+    # A Ridge regression (regularized linear regression) is used here to mitigate overfitting
+    # given the high-dimensional gene expression data.
+    model = Ridge(alpha=1.0)
+    model.fit(X_train, y_train)
+
+    # Predict on the test set.
+    y_pred = model.predict(X_test)
+
+    # Step 6. Compute and print the root mean squared error (RMSE) on the test set.
+    rmse = math.sqrt(mean_squared_error(y_test, y_pred))
+    print("Test set RMSE: {:.3f}".format(rmse))
+
+    # Step 7. Generate a scatter plot of predicted vs actual gestational age values.
+    plt.figure(figsize=(8, 6))
+    plt.scatter(y_test, y_pred, alpha=0.7, edgecolor='k')
+    plt.xlabel("Actual Gestational Age")
+    plt.ylabel("Predicted Gestational Age")
+    plt.title("Predicted vs Actual Gestational Age on Test Set")
+
+    # Plus a dashed diagonal line indicating perfect prediction.
+    min_val = min(y_test.min(), y_pred.min())
+    max_val = max(y_test.max(), y_pred.max())
+    plt.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2)
+    plt.tight_layout()
+    plt.show()
+
+if __name__ == "__main__":
+    main()
+
+------------------------------------------------------------
+
+Explanation of the main steps:
+
+1. The script downloads the processed series matrix file for GSE149440 using GEOparse.
+2. It then iterates over each sample (GSM) and parses its “characteristics_ch1” strings to extract the numeric gestational age and the training flag (taken from strings such as “gestational age: 14 weeks” and “train: 1”).
+3. The gene expression data is loaded via GEOparse’s pivot_samples method (the resulting DataFrame is transposed so that each row corresponds to a sample).
+4. Metadata and expression data are merged (based on sample IDs) and split into training (train == "1") and test (train == "0") subsets.
+5. A Ridge regression model is fitted on the training set to predict gestational age from the high-dimensional gene expression features.
+6. After prediction on the test set the script computes and prints the RMSE.
+7. Finally, a scatter plot is generated that compares the actual versus predicted gestational age values (with a reference diagonal line).
+
+This script should serve as a good starting point for analysis on GSE149440.

@@ -1,0 +1,183 @@
+Below is one complete Python script that meets your specifications. In this example we use logistic regression (with scaling) and compute the ROC AUC on the held‐out validation set. (You could swap in any other classifier.) Note that we first compute the set of microbial features common to the species abundance files, then we merge each abundance file with its metadata file on the “specimen” column and, for each participant (using the “participant_id” column), we keep only the specimen with the highest collect_wk below a given threshold. For the PTB analysis we require collect_wk < 32 and define PTB as delivery_wk < 37; for the EarlyPTB analysis we require collect_wk < 28 and define EarlyPTB as delivery_wk < 32.
+
+You can save the script (for example as run_ptb_analysis.py) and run it after installing the required packages (pandas, numpy, scikit‐learn, matplotlib).
+
+───────────────────────────── Begin Code ──────────────────────────────
+
+#!/usr/bin/env python
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import roc_auc_score, roc_curve
+
+# Function to load and prepare the data.
+def prepare_data(species_file, metadata_file, collect_wk_threshold, delivery_wk_threshold, common_features, outcome_name):
+    """
+    Reads species abundance and metadata files, merges them on the 'specimen' column,
+    filters to specimens with collect_wk less than a threshold, and for each participant
+    picks the record with the highest collect_wk (but still below threshold). Then creates 
+    a binary outcome variable.
+    
+    Parameters:
+      species_file: CSV file containing microbial features (with a column 'specimen').
+      metadata_file: CSV file containing metadata (with columns specimen, participant_id, collect_wk, delivery_wk, ...).
+      collect_wk_threshold: Only specimens with collect_wk < this threshold are retained.
+      delivery_wk_threshold: Outcome is defined as delivery_wk < this value.
+      common_features: List of microbial feature column names to use (those present in both training and validation).
+      outcome_name: Name for the outcome variable to be added (e.g. 'PTB' or 'EarlyPTB').
+      
+    Returns:
+      X: DataFrame of microbial features (only the common ones).
+      y: Series containing the binary outcome.
+    """
+    # Load species abundance and metadata.
+    df_species = pd.read_csv(species_file)
+    df_meta = pd.read_csv(metadata_file)
+    
+    # Merge on specimen.
+    df = pd.merge(df_species, df_meta, on='specimen', how='inner')
+    
+    # Filter to specimens with collect_wk below the provided threshold.
+    df = df[df['collect_wk'] < collect_wk_threshold].copy()
+    
+    # For each participant, pick the sample with the highest collect_wk value (below the threshold).
+    # (If there is a tie, idxmax() will return the first occurrence.)
+    idx = df.groupby('participant_id')['collect_wk'].idxmax()
+    df = df.loc[idx].copy()
+    
+    # Create binary outcome: 1 if delivery_wk is less than the provided threshold; else 0.
+    df[outcome_name] = (df['delivery_wk'] < delivery_wk_threshold).astype(int)
+    
+    # Use only the microbial features (common to both training and validation) as predictors.
+    X = df[common_features].copy()
+    y = df[outcome_name].copy()
+    
+    return X, y
+
+def train_and_evaluate(X_train, y_train, X_valid, y_valid, title_suffix=""):
+    """
+    Scales the data, trains a logistic regression, computes ROC AUC on the validation set,
+    and plots the ROC curve.
+    
+    Parameters:
+      X_train, y_train: Training data.
+      X_valid, y_valid: Validation data.
+      title_suffix: Suffix to add to plot titles (e.g., "PTB" or "EarlyPTB").
+      
+    Returns:
+      auc_score: ROC AUC on the feature-scaled validation set.
+    """
+    # Scale features.
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_valid_scaled = scaler.transform(X_valid)
+    
+    # Train a logistic regression (using default parameters – feel free to change these)
+    model = LogisticRegression(max_iter=1000, solver='lbfgs')
+    model.fit(X_train_scaled, y_train)
+    
+    # Predict probabilities for the positive outcome class.
+    y_prob = model.predict_proba(X_valid_scaled)[:, 1]
+    
+    # Calculate ROC AUC.
+    auc_score = roc_auc_score(y_valid, y_prob)
+    print(f"{title_suffix} analysis: Test set ROC AUC = {auc_score:.3f}")
+    
+    # Compute ROC curve.
+    fpr, tpr, thresholds = roc_curve(y_valid, y_prob)
+    
+    # Plot the ROC curve.
+    plt.figure(figsize=(6, 6))
+    plt.plot(fpr, tpr, color='blue', lw=2, label=f'ROC curve (AUC = {auc_score:.3f})')
+    plt.plot([0, 1], [0, 1], color='gray', lw=1, linestyle='--')
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title(f"ROC Curve {title_suffix} Analysis")
+    plt.legend(loc="lower right")
+    plt.grid(True)
+    plt.show()
+    
+    return auc_score
+
+def main():
+    # First, read in species abundance data from training and validation sets to determine the common feature set.
+    train_species = pd.read_csv("training_species_abundance.csv")
+    valid_species = pd.read_csv("validation_species_abundance.csv")
+    
+    # Exclude the linking column "specimen" from the microbial features.
+    common_features = list(set(train_species.columns).intersection(set(valid_species.columns)) - {'specimen'})
+    print(f"Number of microbial features in common: {len(common_features)}")
+    
+    ###################################################################################
+    # Analysis 1: Predict PTB (delivery_wk < 37 using last specimen with collect_wk < 32)
+    ###################################################################################
+    # Prepare the training data.
+    X_train_ptb, y_train_ptb = prepare_data(
+        species_file="training_species_abundance.csv",
+        metadata_file="training_metadata.csv",
+        collect_wk_threshold=32,         # only consider specimens collected before week 32
+        delivery_wk_threshold=37,        # PTB: delivery_wk < 37
+        common_features=common_features,
+        outcome_name="PTB"
+    )
+    
+    # Prepare the validation/test data.
+    X_valid_ptb, y_valid_ptb = prepare_data(
+        species_file="validation_species_abundance.csv",
+        metadata_file="validation_metadata.csv",
+        collect_wk_threshold=32,         # only consider specimens collected before week 32
+        delivery_wk_threshold=37,        # PTB: delivery_wk < 37
+        common_features=common_features,
+        outcome_name="PTB"
+    )
+    
+    print("\nRunning PTB analysis (delivery_wk < 37 using specimen with collect_wk < 32)...")
+    _ = train_and_evaluate(X_train_ptb, y_train_ptb, X_valid_ptb, y_valid_ptb, title_suffix="PTB")
+    
+    ##############################################################################################
+    # Analysis 2: Predict EarlyPTB (delivery_wk < 32 using last specimen with collect_wk < 28)
+    ##############################################################################################
+    # Prepare the training data.
+    X_train_eptb, y_train_eptb = prepare_data(
+        species_file="training_species_abundance.csv",
+        metadata_file="training_metadata.csv",
+        collect_wk_threshold=28,         # only consider specimens collected before week 28
+        delivery_wk_threshold=32,        # EarlyPTB: delivery_wk < 32
+        common_features=common_features,
+        outcome_name="EarlyPTB"
+    )
+    
+    # Prepare the validation/test data.
+    X_valid_eptb, y_valid_eptb = prepare_data(
+        species_file="validation_species_abundance.csv",
+        metadata_file="validation_metadata.csv",
+        collect_wk_threshold=28,         # only consider specimens collected before week 28
+        delivery_wk_threshold=32,        # EarlyPTB: delivery_wk < 32
+        common_features=common_features,
+        outcome_name="EarlyPTB"
+    )
+    
+    print("\nRunning EarlyPTB analysis (delivery_wk < 32 using specimen with collect_wk < 28)...")
+    _ = train_and_evaluate(X_train_eptb, y_train_eptb, X_valid_eptb, y_valid_eptb, title_suffix="EarlyPTB")
+
+if __name__ == "__main__":
+    main()
+
+───────────────────────────── End Code ──────────────────────────────
+
+Explanation of the code steps:
+1. We first determine the common microbial features (i.e. the columns shared between the training and validation species abundance files, excluding the linking column “specimen”).
+2. The function prepare_data() merges the species abundances with the metadata, filters to keep only specimens with collect_wk below a specified threshold (32 for PTB and 28 for EarlyPTB), and then for each participant (given by participant_id) selects the sample with the highest collect_wk (i.e. the last available specimen before the cutoff).
+3. A binary outcome is created based on delivery_wk (<37 for PTB and <32 for EarlyPTB). Only microbial features are retained as X.
+4. The train_and_evaluate() function standardizes the data, trains a logistic regression model (you may change this model if desired), computes ROC AUC on the test set, and plots the ROC curve.
+5. The main() function runs the two analyses one after the other and prints the ROC AUC as well as displaying the curves.
+
+Make sure that your working directory contains the four CSV files:
+• training_species_abundance.csv
+• validation_species_abundance.csv
+• training_metadata.csv
+• validation_metadata.csv
+
+This script should give you the desired outputs.

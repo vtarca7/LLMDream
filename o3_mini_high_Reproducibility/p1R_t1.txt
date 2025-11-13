@@ -1,0 +1,78 @@
+Below is one complete R script that downloads the dataset GSE149440 from GEO, extracts the expression matrix and sample metadata (which must include a “train:ch1” and a “gestational age:ch1” column), subsets the training and test samples, fits a lasso‐regression model using cross‐validation via the glmnet package on the high‐dimensional gene expression data, makes predictions on the test set, computes the test RMSE, and finally produces a scatter plot of predicted versus actual gestational age values.
+
+Before running the code, make sure you have the required packages installed. You can install any missing package (e.g. GEOquery or glmnet) via install.packages("packageName").
+
+------------------------------------------------------------
+# Begin R script
+
+# Install necessary packages if not already installed
+if (!requireNamespace("GEOquery", quietly = TRUE))
+    install.packages("GEOquery")
+if (!requireNamespace("glmnet", quietly = TRUE))
+    install.packages("glmnet")
+
+# Load libraries
+library(GEOquery)
+library(glmnet)
+
+# 1. Download the GEO dataset GSE149440.
+# Note: GSEMatrix=TRUE downloads the dataset as an ExpressionSet.
+# Sometimes multiple platforms are returned.
+gse_list <- getGEO("GSE149440", GSEMatrix = TRUE, AnnotGPL = TRUE)
+# For simplicity, we use the first element.
+eset <- gse_list[[1]]
+
+# 2. Extract gene expression data and sample metadata.
+# The expression matrix has genes in rows and samples in columns.
+expr_matrix <- exprs(eset)
+metadata <- pData(eset)
+
+# 3. Subset samples into training and test sets based on metadata variable "train:ch1".
+# Training samples: train:ch1 == "1"
+# Test samples: train:ch1 == "0"
+train_idx <- which(metadata$`train:ch1` == "1")
+test_idx  <- which(metadata$`train:ch1` == "0")
+
+# 4. Extract gestational age values from metadata.
+# They are in the column named "gestational age:ch1". Ensure they are numeric.
+y_train <- as.numeric(as.character(metadata$`gestational age:ch1`[train_idx]))
+y_test  <- as.numeric(as.character(metadata$`gestational age:ch1`[test_idx]))
+
+# 5. Prepare the predictor matrices.
+# Transpose so that rows are samples and columns are genes.
+X_train <- t(expr_matrix[, train_idx])
+X_test  <- t(expr_matrix[, test_idx])
+
+# 6. Train a prediction model.
+# Because there are tens of thousands of genes (p >> n), we use lasso regression,
+# which automatically performs variable selection.
+# glmnet standardizes predictors by default.
+set.seed(123)  # For reproducibility of CV folds
+cv_fit <- cv.glmnet(x = X_train, y = y_train, alpha = 1, nfolds = 10)
+
+# 7. Predict gestational age on the test set using the lambda minimizing CV error.
+y_pred <- predict(cv_fit, newx = X_test, s = "lambda.min")
+
+# 8. Compute the RMSE on the test set.
+rmse <- sqrt(mean((y_pred - y_test)^2))
+cat("Test set RMSE:", rmse, "\n")
+
+# 9. Plot predicted vs actual gestational age values for the test set.
+# The plot has actual gestational age on the x-axis and predicted on the y-axis.
+plot(y_test, y_pred,
+     xlab = "Actual Gestational Age",
+     ylab = "Predicted Gestational Age",
+     main = "Predicted vs. Actual Gestational Age (Test Set)",
+     pch = 20, col = "blue")
+# Add a 45° reference line showing perfect prediction.
+abline(a = 0, b = 1, col = "red", lwd = 2)
+------------------------------------------------------------
+
+Explanation of key aspects of the code:
+• GEOquery’s getGEO function downloads the dataset as an ExpressionSet. The expression data (exprs) and sample metadata (pData) are then used to create the training and test subsets.
+• Since the gene expression matrix has genes as rows and samples as columns, we transpose the matrix so rows correspond to samples (observations) and columns to predictors.
+• The glmnet package is used with cross‐validation (cv.glmnet) to fit a lasso regression model (alpha = 1). This approach is appropriate when the number of predictors (genes) greatly exceeds the number of samples.
+• The model is then applied to the test set, and the RMSE is computed.
+• Finally, a scatter plot of predicted vs. actual gestational age is generated with a red 45° line indicating perfect prediction.
+
+This script should run end‐to‐end (assuming internet access and that the specified metadata fields exist) to perform the desired analysis.

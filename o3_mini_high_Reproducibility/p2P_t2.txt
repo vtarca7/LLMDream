@@ -1,0 +1,93 @@
+Below is one complete example. In this example we:
+1. Read in the feature matrices (which have features as rows and samples as columns with the first column as the feature name). We set the feature names as the index and then transpose so that each row is one sample and each column is one methylation feature.
+2. Read in the metadata (anos) for training and test and set the “Sample_ID” as index.
+3. Merge the feature data with the metadata (using “Sample_ID”) to obtain the outcome variable GA.
+4. Fit a Lasso regression model (with cross‐validation using LassoCV) based solely on the 400K methylation features.
+5. Compute the RMSE on the test set predictions and plot predicted versus actual GA with RMSE included as part of the legend.
+
+Note: Depending on your system’s memory, fitting a model on 400K features may be computationally intensive. In practice, you might want to perform some feature filtering or dimensionality reduction. This example assumes that your computer can handle the full data set.
+
+Here is the Python code:
+
+------------------------------------------------
+#!/usr/bin/env python
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LassoCV
+from sklearn.metrics import mean_squared_error
+
+# ------------------------------
+# 1. Load and preprocess the training data
+# ------------------------------
+
+# Read feature data. The CSV file has features as rows and samples as columns.
+# The first column contains the feature names.
+df_train_features = pd.read_csv('df_training.csv', index_col=0)
+# Transpose so that rows = samples and columns = features
+df_train_features = df_train_features.transpose()
+
+# Read training metadata. Assumes there is a column named "Sample_ID" and the outcome "GA".
+df_train_meta = pd.read_csv('ano_training.csv')
+df_train_meta.set_index('Sample_ID', inplace=True)
+
+# Merge the features and the outcome (GA) using the sample IDs
+# (leave only the GA from the metadata as we are not using any other metadata variables)
+train_data = df_train_features.join(df_train_meta[['GA']])
+X_train = train_data.drop(columns=['GA'])
+y_train = train_data['GA']
+
+# ------------------------------
+# 2. Load and preprocess the test data
+# ------------------------------
+
+df_test_features = pd.read_csv('df_test.csv', index_col=0)
+df_test_features = df_test_features.transpose()
+
+df_test_meta = pd.read_csv('ano_test.csv')
+df_test_meta.set_index('Sample_ID', inplace=True)
+
+test_data = df_test_features.join(df_test_meta[['GA']])
+X_test = test_data.drop(columns=['GA'])
+y_test = test_data['GA']
+
+# ------------------------------
+# 3. Fit the predictive model using LassoCV
+# ------------------------------
+# LassoCV performs cross-validation to select the lasso regularization parameter.
+model = LassoCV(cv=5, n_jobs=-1, random_state=42)
+model.fit(X_train, y_train)
+
+# ------------------------------
+# 4. Evaluate the model on the test set
+# ------------------------------
+y_pred = model.predict(X_test)
+rmse = mean_squared_error(y_test, y_pred, squared=False)
+print(f"Test RMSE: {rmse:.3f}")
+
+# ------------------------------
+# 5. Plot predicted vs actual GA with RMSE in the legend
+# ------------------------------
+plt.figure(figsize=(8, 6))
+# Scatter plot of actual vs predicted values. Here we label the points with the RMSE.
+plt.scatter(y_test, y_pred, alpha=0.5, label=f"Predicted vs Actual (RMSE = {rmse:.2f})")
+plt.xlabel('Actual Gestational Age')
+plt.ylabel('Predicted Gestational Age')
+plt.title('Predicted vs Actual Gestational Age (GA) on Test Set')
+
+# Optionally, plot the identity line for reference
+x_limits = [min(y_test.min(), y_pred.min()), max(y_test.max(), y_pred.max())]
+plt.plot(x_limits, x_limits, color='red', linestyle='--', label='Ideal Fit')
+
+plt.legend()
+plt.show()
+
+------------------------------------------------
+
+Explanation:
+• We load the feature data with index_col=0 so that the first column (feature names) become the index; then we transpose so that each row corresponds to a sample.
+• The metadata files are read and then set to use the “Sample_ID” column as the index before merging.
+• The LassoCV model is trained using only the methylation features.
+• Finally, the RMSE is computed on the test set, printed, and a scatter plot is generated with the RMSE included in the legend.
+
+This code is self-contained so long as the CSV files are in the working directory and have the described structure.

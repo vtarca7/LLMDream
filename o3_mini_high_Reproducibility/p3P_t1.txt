@@ -1,0 +1,144 @@
+Below is one complete Python script that implements the requested analysis. In this example we define helper functions to (1) load the “species” and metadata files and filter them to keep only one specimen per participant (the one with the highest collect_wk under the given threshold), (2) compute the common microbial features between training and test sets, and (3) fit a logistic regression model (with standard‐scaling) on training data and then evaluate it on the test data, printing the AUC and plotting an ROC curve. The analysis is run twice: once for predicting PTB (delivery_wk < 37 using samples with collect_wk < 32) and once for predicting EarlyPTB (delivery_wk < 32 using samples with collect_wk < 28).
+
+Code:
+
+------------------------------------------------------------
+#!/usr/bin/env python3
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import roc_auc_score, roc_curve
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import make_pipeline
+
+def load_filtered_data(species_file, metadata_file, collect_wk_limit, delivery_wk_threshold):
+    """
+    Loads metadata and species abundance data, filters the metadata to keep only specimens
+    with collect_wk below the given limit and then for each participant selects the specimen
+    with the highest collect_wk (i.e. the “last” specimen before the cutoff).
+    It also creates a binary outcome column 'target' defined as:
+       target = 1 if delivery_wk < delivery_wk_threshold, else 0.
+    The merged dataframe is returned.
+    """
+    # Load metadata
+    meta = pd.read_csv(metadata_file)
+    # Filter rows for which collect_wk is less than the given threshold
+    meta_filt = meta[meta['collect_wk'] < collect_wk_limit].copy()
+    if meta_filt.empty:
+        raise ValueError(f"No samples with collect_wk < {collect_wk_limit} in {metadata_file}.")
+    # For each participant, select the specimen with the highest collect_wk
+    meta_grouped = meta_filt.loc[meta_filt.groupby("participant_id")["collect_wk"].idxmax()].copy()
+    # Define the outcome (binary) column: for example, for PTB, target=1 when delivery_wk < 37
+    meta_grouped["target"] = (meta_grouped["delivery_wk"] < delivery_wk_threshold).astype(int)
+    
+    # Load the species abundance data
+    species = pd.read_csv(species_file)
+    # Merge metadata and species data on the "specimen" column
+    merged = pd.merge(meta_grouped, species, on="specimen")
+    return merged
+
+def get_common_features(train_species_file, test_species_file):
+    """
+    Loads the training and test species abundance files (which contain microbial features)
+    and returns the list of features (i.e. columns) that are common to both files.
+    We exclude the linking column "specimen".
+    """
+    train_spec = pd.read_csv(train_species_file)
+    test_spec = pd.read_csv(test_species_file)
+    # Microbial features are all columns except "specimen"
+    train_features = set(train_spec.columns) - {"specimen"}
+    test_features = set(test_spec.columns) - {"specimen"}
+    common_feats = list(train_features.intersection(test_features))
+    return common_feats
+
+def run_prediction(analysis_label,
+                   train_species_file, train_metadata_file,
+                   test_species_file, test_metadata_file,
+                   collect_wk_limit, delivery_wk_threshold):
+    """
+    Loads and filters the training and test data, selects only those microbial features found in both,
+    fits a logistic regression model using just the microbial features, and computes & plots the ROC.
+    
+    analysis_label: a string label (e.g., "PTB" or "EarlyPTB")
+    collect_wk_limit: use only specimens with collect_wk below this number.
+    delivery_wk_threshold: define outcome as (delivery_wk < this threshold) -> target=1.
+    """
+    print(f"\nRunning analysis for {analysis_label}")
+    # Load and filter the datasets
+    train_data = load_filtered_data(train_species_file, train_metadata_file, collect_wk_limit, delivery_wk_threshold)
+    test_data  = load_filtered_data(test_species_file, test_metadata_file, collect_wk_limit, delivery_wk_threshold)
+    
+    # Get microbial features present in both training and test sets.
+    common_features = get_common_features(train_species_file, test_species_file)
+    if not common_features:
+        raise ValueError("There are no common features between training and test species datasets.")
+    
+    # Prepare X (features) and y (target)
+    X_train = train_data[common_features]
+    y_train = train_data["target"]
+    X_test  = test_data[common_features]
+    y_test  = test_data["target"]
+    
+    # Build a simple modeling pipeline: standardize features then fit logistic regression.
+    model = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000, random_state=42))
+    model.fit(X_train, y_train)
+    
+    # Get predicted probabilities for the positive class.
+    y_prob = model.predict_proba(X_test)[:, 1]
+    
+    # Compute AUC ROC score.
+    auc_value = roc_auc_score(y_test, y_prob)
+    print(f"{analysis_label} AUC ROC = {auc_value:.3f}")
+    
+    # Compute ROC curve
+    fpr, tpr, _ = roc_curve(y_test, y_prob)
+    plt.figure()
+    plt.plot(fpr, tpr, label=f"ROC curve (area = {auc_value:.2f})")
+    plt.plot([0, 1], [0, 1], "k--", label="Chance")
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title(f"ROC Curve for {analysis_label}")
+    plt.legend(loc="lower right")
+    plt.show()
+
+if __name__ == '__main__':
+    # File names for training and validation species and metadata
+    train_species_file    = "training_species_abundance.csv"
+    train_metadata_file   = "training_metadata.csv"
+    test_species_file     = "validation_species_abundance.csv"
+    test_metadata_file    = "validation_metadata.csv"
+    
+    # Analysis 1: Predict PTB outcome (delivery_wk < 37) using the last specimen with collect_wk < 32.
+    run_prediction(analysis_label="PTB",
+                   train_species_file=train_species_file,
+                   train_metadata_file=train_metadata_file,
+                   test_species_file=test_species_file,
+                   test_metadata_file=test_metadata_file,
+                   collect_wk_limit=32,         # only keep specimens with collect_wk < 32
+                   delivery_wk_threshold=37)      # define PTB as delivery_wk < 37
+    
+    # Analysis 2: Predict EarlyPTB outcome (delivery_wk < 32) 
+    # using the last specimen with collect_wk < 28.
+    run_prediction(analysis_label="EarlyPTB",
+                   train_species_file=train_species_file,
+                   train_metadata_file=train_metadata_file,
+                   test_species_file=test_species_file,
+                   test_metadata_file=test_metadata_file,
+                   collect_wk_limit=28,         # only keep specimens with collect_wk < 28
+                   delivery_wk_threshold=32)     # define EarlyPTB as delivery_wk < 32
+
+------------------------------------------------------------
+
+Explanation of key steps:
+
+1. The function load_filtered_data reads a metadata file and retains only rows for which the “collect_wk” is below the cutoff. Then, using groupby on “participant_id” and idxmax on “collect_wk”, it selects for each participant the specimen with the highest collection week (i.e. the last eligible specimen). A new binary column "target" is created where, for the PTB analysis, target = 1 if delivery_wk < 37 (and for EarlyPTB, delivery_wk < 32), and 0 otherwise. This filtered metadata is then merged (by the “specimen” column) with the corresponding species abundance data.
+ 
+2. The function get_common_features reads the training and test species abundance files (which contain many microbial features) and determines which feature columns (apart from the “specimen” linking column) are present in both datasets; these features are then the only ones used for model fitting.
+
+3. The function run_prediction performs the full analysis: after filtering and merging data and selecting the common microbial features, it builds a scikit‑learn pipeline that first scales the features and then fits a logistic regression model. The model’s ROC AUC is printed and an ROC curve is plotted.
+
+4. Finally, the main block runs the analysis twice using the given thresholds. 
+
+You can run and adjust paths if needed. This self-contained code should provide the model fitting, AUC printing, and ROC plotting for both PTB and EarlyPTB analyses.

@@ -1,0 +1,93 @@
+Below is an example R script that downloads the series GSE149440 from GEO, extracts the expression matrix and metadata (with the response variable “gestational age:ch1” and the train/test flag “train:ch1”), fits a penalized linear regression model (using LASSO via glmnet) on the training‐set samples, evaluates it on the test set (samples with train:ch1 equal to "0"), computes the RMSE, and then plots the predicted versus actual gestational age. (Before running the script, make sure you have installed the required packages: GEOquery, glmnet, and ggplot2.)
+
+-----------------------------------------------------------
+# R script begins here
+-----------------------------------------------------------
+  
+# Install packages if needed
+if (!requireNamespace("GEOquery", quietly=TRUE)) {
+  install.packages("BiocManager")
+  BiocManager::install("GEOquery")
+}
+if (!requireNamespace("glmnet", quietly=TRUE)) install.packages("glmnet")
+if (!requireNamespace("ggplot2", quietly=TRUE)) install.packages("ggplot2")
+
+library(GEOquery)
+library(glmnet)
+library(ggplot2)
+
+# Download the dataset GSE149440 from GEO
+# (GSEMatrix=TRUE returns ExpressionSet objects)
+gset_list <- getGEO("GSE149440", GSEMatrix = TRUE)
+# In case more than one platform is present, select the first one.
+gset <- gset_list[[1]]
+
+# Extract the expression matrix and phenotype (metadata).
+exprMatrix <- exprs(gset)
+phenoData <- pData(gset)
+
+# It is assumed that the sample metadata include two columns exactly named:
+#   "gestational age:ch1"  and  "train:ch1"
+# You may verify the column names with:
+#print(colnames(phenoData))
+
+# Convert the response variable (gestational age) into numeric
+phenoData$`gestational age:ch1` <- as.numeric(as.character(phenoData$`gestational age:ch1`))
+# In case the training flag is stored as a factor or numeric, convert to character for consistency.
+phenoData$`train:ch1` <- as.character(phenoData$`train:ch1`)
+
+# Identify training and test samples based on the "train:ch1" flag.
+# Only samples with train:ch1 equal to "1" will be used for training.
+train.idx <- which(phenoData$`train:ch1` == "1")
+test.idx  <- which(phenoData$`train:ch1` == "0")
+
+# Extract training data: note that exprMatrix rows are genes and columns are samples.
+# For modeling with glmnet the design matrix should be of dimensions (n_samples x n_features).
+x_train <- t(exprMatrix[, train.idx])
+x_test  <- t(exprMatrix[, test.idx])
+
+# Get the response (gestational age) for training and test sets.
+y_train <- phenoData$`gestational age:ch1`[train.idx]
+y_test  <- phenoData$`gestational age:ch1`[test.idx]
+
+# Fit a LASSO regression model using glmnet.
+# Because the number of predictors (genes) is very high, glmnet handles regularization automatically.
+# Use cross-validation to select lambda.
+set.seed(123)  # For reproducibility
+cvfit <- cv.glmnet(x_train, y_train, alpha = 1)
+bestLambda <- cvfit$lambda.min
+
+# Fit the final model with the selected lambda.
+model <- glmnet(x_train, y_train, alpha = 1, lambda = bestLambda)
+
+# Use the model to predict gestational age on the test set.
+y_pred <- predict(model, newx = x_test)
+
+# Compute the Root Mean Squared Error (RMSE) on the test set.
+rmse <- sqrt(mean((y_test - y_pred)^2))
+cat("Test RMSE:", rmse, "\n")
+
+# Generate a scatter plot of predicted vs. actual gestational age for test samples.
+plot_data <- data.frame(Actual = y_test, Predicted = as.vector(y_pred))
+
+p <- ggplot(plot_data, aes(x = Actual, y = Predicted)) +
+  geom_point(color = "blue", alpha = 0.6) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "red") +
+  labs(title = "Predicted vs. Actual Gestational Age on Test Set",
+       x = "Actual Gestational Age",
+       y = "Predicted Gestational Age") +
+  theme_minimal()
+
+print(p)
+
+-----------------------------------------------------------
+# R script ends here
+-----------------------------------------------------------
+
+Notes:
+1. The code assumes that the GEO ExpressionSet object contains metadata columns exactly named "gestational age:ch1" and "train:ch1". If the names differ (for example, sometimes they appear as "characteristics_ch1"), please adjust the column names accordingly.
+2. The glmnet model here is set to perform LASSO (alpha=1) regression; you could also try ridge regression (alpha=0) or an elastic net (alpha between 0 and 1) if desired.
+3. Other pre‐processing steps (e.g., normalization or log‐transformation) could be added depending on the properties of the expression data.
+4. Large datasets with tens of thousands of features may require more memory and/or further feature selection steps in a production scenario.
+
+This script fulfills the request by training a prediction model on the training set and evaluating it on the test set with an RMSE and a scatter plot of predictions versus actual gestational ages.

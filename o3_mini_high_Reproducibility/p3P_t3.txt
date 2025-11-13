@@ -1,0 +1,197 @@
+Below is an example Python script that uses scikit‐learn’s logistic regression (with scaling) to predict two outcomes: first “PTB” (delivery_wk < 37) using only the last specimen with collect_wk < 32 per participant, and then “EarlyPTB” (delivery_wk < 32) using only the last specimen with collect_wk < 28 per participant. In this example the training species abundance (microbial feature) data and metadata are read from CSV files, the common features between training and validation sets are retained, the data are merged on “specimen”, and then for each participant the appropriate specimen is selected before model fitting and ROC evaluation.
+
+You can save the code as, for example, “predict_ptb.py” and run it (making sure the CSV files are in the working directory).
+
+------------------------------------------------------------
+#!/usr/bin/env python3
+"""
+This script fits predictive logistic regression models using microbial feature data to
+predict a binary preterm birth (PTB) outcome and an EarlyPTB outcome.
+It uses data from:
+  • training_species_abundance.csv and training_metadata.csv (training set)
+  • validation_species_abundance.csv and validation_metadata.csv (test set)
+The species abundance (microbial feature) data are merged with metadata (via the “specimen” column).
+Only the specimen with the highest collect_wk value (but below a threshold) is kept per participant.
+For the PTB outcome, we use specimens with collect_wk < 32 and define PTB as delivery_wk < 37.
+For the EarlyPTB outcome, we use specimens with collect_wk < 28 and define EarlyPTB as delivery_wk < 32.
+The script prints the ROC AUC on the test set and plots an ROC curve for each outcome.
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import roc_auc_score, roc_curve
+
+def prepare_dataset(species_df, metadata_df, collect_wk_limit, delivery_wk_cutoff, feature_cols, outcome_label):
+    """
+    Merge species abundance data with metadata.
+    Keep only rows with collect_wk < collect_wk_limit.
+    For each participant (identified by participant_id), choose the specimen with the highest collect_wk.
+    Create an outcome column using delivery_wk < delivery_wk_cutoff.
+    
+    Parameters:
+      species_df: DataFrame containing species abundance data, must include 'specimen'
+      metadata_df: DataFrame containing metadata for specimens; must include columns:
+                   "specimen", "participant_id", "collect_wk", and "delivery_wk"
+      collect_wk_limit: Maximum allowed collect_wk value (e.g., 32 for PTB, 28 for EarlyPTB)
+      delivery_wk_cutoff: Delivery week cutoff defining the outcome (e.g., 37 for PTB, 32 for EarlyPTB)
+      feature_cols: List of microbiome feature columns to be used as predictors.
+      outcome_label: Name for the outcome column to create (e.g., "PTB" or "EarlyPTB")
+    
+    Returns: X (predictors), y (binary outcome), and the merged (and filtered) DataFrame.
+    """
+    # Merge on 'specimen'
+    df = pd.merge(species_df, metadata_df, on='specimen')
+    
+    # Filter to specimens with collect_wk below the allowed limit
+    df = df[df['collect_wk'] < collect_wk_limit]
+    
+    # For each participant, choose the row (specimen) with the highest collect_wk
+    # (i.e. the “last available” specimen under the threshold)
+    df = df.sort_values(by=['participant_id', 'collect_wk'])
+    df_last = df.groupby('participant_id', as_index=False).apply(lambda g: g.loc[g['collect_wk'].idxmax()])
+    df_last = df_last.reset_index(drop=True)
+    
+    # Create outcome: 1 if delivery_wk is below the cutoff, 0 otherwise.
+    df_last[outcome_label] = (df_last['delivery_wk'] < delivery_wk_cutoff).astype(int)
+    
+    # X will be the microbial features (only the common features provided) and y the outcome.
+    X = df_last[feature_cols]
+    y = df_last[outcome_label]
+    
+    return X, y, df_last
+
+def plot_roc_curve(y_true, y_scores, title):
+    """
+    Compute ROC curve and plot it.
+    
+    Parameters:
+      y_true: true binary outcomes.
+      y_scores: predicted probability (or score) for the positive class.
+      title: title of the plot.
+    """
+    fpr, tpr, thresholds = roc_curve(y_true, y_scores)
+    auc_val = roc_auc_score(y_true, y_scores)
+    plt.figure(figsize=(6, 5))
+    plt.plot(fpr, tpr, label=f'ROC curve (AUC = {auc_val:.3f})')
+    plt.plot([0, 1], [0, 1], 'k--', label='Chance Level')
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title(title)
+    plt.legend(loc='lower right')
+    plt.grid(alpha=0.3)
+    plt.show()
+
+def main():
+    # -------------------------
+    # Load the species abundance data for training and validation
+    # -------------------------
+    train_species = pd.read_csv('training_species_abundance.csv')
+    val_species   = pd.read_csv('validation_species_abundance.csv')
+    
+    # Determine the set of common microbial features between train and validation.
+    # We assume that the "specimen" column is present and should be retained for merging.
+    train_cols = set(train_species.columns)
+    val_cols   = set(val_species.columns)
+    common_cols = list(train_cols.intersection(val_cols))
+    if 'specimen' not in common_cols:
+        raise ValueError("The common columns between training and validation species data do not include 'specimen'.")
+    
+    # Exclude the 'specimen' column from the feature predictors.
+    common_features = [col for col in common_cols if col != 'specimen']
+    
+    # Subset the species data to include only the "specimen" and the common feature columns.
+    train_species = train_species[['specimen'] + common_features]
+    val_species   = val_species[['specimen'] + common_features]
+    
+    # -------------------------
+    # Load metadata for training and validation.
+    # -------------------------
+    train_metadata = pd.read_csv('training_metadata.csv')
+    val_metadata   = pd.read_csv('validation_metadata.csv')
+    
+    # -------------------------
+    # Part 1: Predict PTB Outcome (delivery_wk < 37) using last specimen with collect_wk < 32
+    # -------------------------
+    print("===== Predicting PTB (delivery_wk < 37) with specimen collect_wk < 32 =====")
+    
+    # Prepare training data
+    X_train, y_train, df_train = prepare_dataset(species_df=train_species,
+                                                 metadata_df=train_metadata,
+                                                 collect_wk_limit=32,
+                                                 delivery_wk_cutoff=37,
+                                                 feature_cols=common_features,
+                                                 outcome_label="PTB")
+    # Prepare validation (test) data
+    X_test, y_test, df_test = prepare_dataset(species_df=val_species,
+                                              metadata_df=val_metadata,
+                                              collect_wk_limit=32,
+                                              delivery_wk_cutoff=37,
+                                              feature_cols=common_features,
+                                              outcome_label="PTB")
+    
+    # Build a pipeline with scaling and logistic regression
+    model = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000))
+    model.fit(X_train, y_train)
+    
+    # Compute predicted probabilities (for the positive class)
+    y_pred_prob = model.predict_proba(X_test)[:, 1]
+    auc_ptb = roc_auc_score(y_test, y_pred_prob)
+    print(f"PTB Outcome: ROC AUC on test set = {auc_ptb:.3f}")
+    
+    # Plot ROC curve
+    plot_roc_curve(y_true=y_test, y_scores=y_pred_prob, title="PTB ROC Curve (collect_wk < 32)")
+    
+    # -------------------------
+    # Part 2: Predict EarlyPTB Outcome (delivery_wk < 32) using last specimen with collect_wk < 28
+    # -------------------------
+    print("\n===== Predicting EarlyPTB (delivery_wk < 32) with specimen collect_wk < 28 =====")
+    
+    # Prepare training data
+    X_train_early, y_train_early, df_train_early = prepare_dataset(species_df=train_species,
+                                                                   metadata_df=train_metadata,
+                                                                   collect_wk_limit=28,
+                                                                   delivery_wk_cutoff=32,
+                                                                   feature_cols=common_features,
+                                                                   outcome_label="EarlyPTB")
+    # Prepare validation (test) data
+    X_test_early, y_test_early, df_test_early = prepare_dataset(species_df=val_species,
+                                                                metadata_df=val_metadata,
+                                                                collect_wk_limit=28,
+                                                                delivery_wk_cutoff=32,
+                                                                feature_cols=common_features,
+                                                                outcome_label="EarlyPTB")
+    
+    # Build and train a logistic regression model pipeline (scaling + logistic regression)
+    model_early = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000))
+    model_early.fit(X_train_early, y_train_early)
+    
+    # Predicted probabilities for EarlyPTB
+    y_pred_prob_early = model_early.predict_proba(X_test_early)[:, 1]
+    auc_early = roc_auc_score(y_test_early, y_pred_prob_early)
+    print(f"EarlyPTB Outcome: ROC AUC on test set = {auc_early:.3f}")
+    
+    # Plot ROC curve
+    plot_roc_curve(y_true=y_test_early, y_scores=y_pred_prob_early, title="EarlyPTB ROC Curve (collect_wk < 28)")
+
+if __name__ == '__main__':
+    main()
+
+------------------------------------------------------------
+
+Explanation of the code:
+
+1. The code first loads the species abundance (microbial feature) data for training and test sets and finds the intersection of the columns (excluding the “specimen” column used for linking).
+
+2. It loads the metadata files that contain information such as “participant_id”, “delivery_wk” and “collect_wk”.
+
+3. The function prepare_dataset() merges species data with metadata (by “specimen”), filters to only include specimens with collect_wk below a given threshold (32 for PTB, 28 for EarlyPTB), and then for each participant (identified by “participant_id”) only the specimen with the highest collect_wk is retained. The outcome is defined as a binary variable: for PTB the outcome is 1 if delivery_wk < 37, for EarlyPTB it is 1 if delivery_wk < 32.
+
+4. A pipeline is built that scales the features (using StandardScaler) and uses logistic regression. The model is fit on training data and then predicted probabilities are computed on the test set.
+
+5. The ROC AUC is computed and printed, and the ROC curve is plotted for each outcome.
+
+Make sure to have the CSV files in your working directory before running the script.

@@ -1,0 +1,104 @@
+Below is one complete example in Python. This code assumes that:
+
+• The training feature file (df_training.csv) has the first column as feature names and the remaining columns are sample IDs.
+• The training metadata file (ano_training.csv) has a “Sample_ID” column and a “GA” column (for gestational age).
+• The test files (df_test.csv and ano_test.csv) follow the same format.
+• Only feature data are used for prediction.
+
+Because the data are very high dimensional (about 400,000 features versus ~2000 samples), a regularly–penalized linear model such as Lasso is a natural choice. In this example, we use a pipeline that first standardizes the features then fits a Lasso model with 5–fold cross-validation (using LassoCV). After fitting on the training set, the model is used to predict on the test set, the RMSE is computed and printed, and a scatter plot of predicted vs actual GA values is generated with a diagonal (“y=x”) line and an RMSE in the legend.
+
+Here is the complete code:
+
+----------------------------------------------------------------
+#!/usr/bin/env python
+import warnings
+warnings.filterwarnings("ignore")
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+from sklearn.linear_model import LassoCV
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_squared_error
+
+# ------------------------------
+# 1. Load and reformat the training data
+# ------------------------------
+# Read in the training feature data.
+# In df_training.csv, the first column contains feature names and the remaining columns are sample IDs.
+df_train_features = pd.read_csv("df_training.csv")
+df_train_features.set_index(df_train_features.columns[0], inplace=True)
+# Transpose so that each row corresponds to one sample and each column to one feature.
+X_train = df_train_features.transpose()
+
+# Read the training metadata (ano_training.csv) which includes the Sample_ID and GA (gestational age).
+meta_train = pd.read_csv("ano_training.csv")
+meta_train.set_index("Sample_ID", inplace=True)
+
+# Make sure the order of samples in X_train is the same as in the metadata.
+X_train = X_train.loc[meta_train.index]
+y_train = meta_train["GA"]
+
+# ------------------------------
+# 2. Load and reformat the test data
+# ------------------------------
+df_test_features = pd.read_csv("df_test.csv")
+df_test_features.set_index(df_test_features.columns[0], inplace=True)
+X_test = df_test_features.transpose()
+
+meta_test = pd.read_csv("ano_test.csv")
+meta_test.set_index("Sample_ID", inplace=True)
+
+X_test = X_test.loc[meta_test.index]
+y_test = meta_test["GA"]
+
+# If needed, restrict train and test features to common columns:
+common_features = X_train.columns.intersection(X_test.columns)
+X_train = X_train[common_features]
+X_test = X_test[common_features]
+
+# ------------------------------
+# 3. Build and train the predictive model
+# ------------------------------
+# Due to the high‐dimensional data, we use LassoCV with standardization.
+model = make_pipeline(StandardScaler(), LassoCV(cv=5, n_jobs=-1, random_state=42))
+model.fit(X_train, y_train)
+
+# ------------------------------
+# 4. Evaluate the model on the test set
+# ------------------------------
+y_pred = model.predict(X_test)
+
+# Compute RMSE (root mean squared error)
+rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+print("Test RMSE: {:.2f}".format(rmse))
+
+# ------------------------------
+# 5. Generate a scatter plot of predicted vs actual GA values with RMSE in the legend
+# ------------------------------
+plt.figure(figsize=(8, 6))
+plt.scatter(y_test, y_pred, alpha=0.6, label=f"RMSE = {rmse:.2f}")
+plt.xlabel("Actual Gestational Age (GA)")
+plt.ylabel("Predicted Gestational Age (GA)")
+plt.title("Predicted vs Actual Gestational Age")
+
+# Plot the y=x reference line
+min_val = min(y_test.min(), y_pred.min())
+max_val = max(y_test.max(), y_pred.max())
+plt.plot([min_val, max_val], [min_val, max_val], color='red', linestyle='--', label="y=x")
+
+plt.legend()
+plt.show()
+----------------------------------------------------------------
+
+Explanation of the key steps:
+
+1. The feature data are read and transposed so that samples become rows. Then, we set the index according to Sample_ID by matching with the metadata.
+2. The model is built using a pipeline with StandardScaler (to put features on the same scale) and LassoCV to handle the high–dimensional feature space.
+3. After training the model on X_train and y_train, predictions are made on the X_test data.
+4. The RMSE is computed using mean_squared_error from scikit-learn.
+5. A scatter plot is created showing predicted vs actual gestational age values, with a red dashed reference line (y=x) and a legend showing the RMSE.
+
+This code should serve as a complete starting point for fitting such a model given the described data formats.

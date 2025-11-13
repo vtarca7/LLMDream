@@ -1,0 +1,95 @@
+Below is one acceptable solution. In our example the training feature file (“df_training.csv”) has the first column of feature names and then one column per sample. We first read in the feature files and “transpose” them so that rows correspond to samples and columns to the ~400K methylation features. We then merge with the metadata files (which contain Sample_ID and gestational age “GA”) and finally fit a Ridge regression model (a popular choice when the number of features is huge). In the end we print the test RMSE and produce a scatter plot of the predicted versus actual GA (with the RMSE shown in the legend). (If your actual target column name differs from “GA”, adjust the code accordingly.)
+
+Here is the complete code:
+
+------------------------------------------------------------
+#!/usr/bin/env python3
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.linear_model import Ridge
+from sklearn.metrics import mean_squared_error
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+
+# -------------------------------
+# 1. Load and process the training data 
+# -------------------------------
+
+# Read the training feature data.
+# Note: features are rows and samples are columns.
+df_train = pd.read_csv('df_training.csv')
+
+# Set the first column (feature names) as the index and then transpose.
+# Now each row corresponds to a sample and columns are features.
+df_train_transposed = df_train.set_index(df_train.columns[0]).T.reset_index()
+df_train_transposed = df_train_transposed.rename(columns={'index': 'Sample_ID'})
+
+# Read the training metadata (which contains Sample_ID and gestational age “GA”).
+meta_train = pd.read_csv('ano_training.csv')
+
+# Merge the metadata with the feature data on Sample_ID.
+# (Only the GA column from the metadata is kept as target.)
+train_data = pd.merge(meta_train[['Sample_ID', 'GA']], df_train_transposed, on='Sample_ID')
+
+# Separate predictors and target
+X_train = train_data.drop(columns=['Sample_ID', 'GA'])
+y_train = train_data['GA']
+
+# -------------------------------
+# 2. Load and process the test data 
+# -------------------------------
+
+df_test = pd.read_csv('df_test.csv')
+df_test_transposed = df_test.set_index(df_test.columns[0]).T.reset_index()
+df_test_transposed = df_test_transposed.rename(columns={'index': 'Sample_ID'})
+
+meta_test = pd.read_csv('ano_test.csv')
+test_data = pd.merge(meta_test[['Sample_ID', 'GA']], df_test_transposed, on='Sample_ID')
+
+X_test = test_data.drop(columns=['Sample_ID', 'GA'])
+y_test = test_data['GA']
+
+# -------------------------------
+# 3. Fit the predictive model
+# -------------------------------
+# Using a pipeline that scales features is often recommended when using regularized regression.
+# Note: With 400K features this can be computationally heavy.
+model = make_pipeline(StandardScaler(), Ridge(alpha=1.0))
+model.fit(X_train, y_train)
+
+# -------------------------------
+# 4. Evaluate the model on the test set
+# -------------------------------
+y_pred = model.predict(X_test)
+rmse = mean_squared_error(y_test, y_pred, squared=False)
+print("Test RMSE: {:.4f}".format(rmse))
+
+# -------------------------------
+# 5. Generate a scatter plot: predicted vs actual GA
+# -------------------------------
+plt.figure(figsize=(8, 6))
+# Plot predicted vs actual. We pass the label to be used in the legend.
+plt.scatter(y_test, y_pred, alpha=0.5, label=f"RMSE: {rmse:.2f}")
+plt.xlabel("Actual Gestational Age")
+plt.ylabel("Predicted Gestational Age")
+plt.title("Predicted vs Actual Gestational Age")
+plt.legend()
+
+# For reference, plot a red dashed line corresponding to perfect prediction.
+min_val = min(y_test.min(), y_pred.min())
+max_val = max(y_test.max(), y_pred.max())
+plt.plot([min_val, max_val], [min_val, max_val], 'r--')
+plt.show()
+
+------------------------------------------------------------
+
+A few notes:
+• This code assumes that:
+  – df_training.csv and df_test.csv have the first column consisting of feature names,
+  – The remaining columns are sample IDs, and
+  – The metadata files (ano_training.csv and ano_test.csv) have columns “Sample_ID” and “GA” (gestational age).
+• Since the number of features (~400K) is huge compared to ~2000 samples, a Ridge (or other regularized method) is preferable over an ordinary least-squares regression.
+• If you do not need scaling or wish to change the regularization, you can modify the pipeline accordingly.
+
+This solution meets the requirements: it fits one predictive model from the methylation features alone, computes the RMSE on the test set, and shows the scatter plot with the RMSE in the legend.

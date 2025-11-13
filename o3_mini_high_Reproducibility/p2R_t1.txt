@@ -1,0 +1,93 @@
+Below is an example R script that reads the data, reformats it so that each row is a sample (with the predictors coming from the methylation features) and then fits a LASSO regression model using cv.glmnet. (LASSO is chosen here because you have many (≈400K) features with only ~2000 samples.) The script then predicts gestational age on the test set, computes the root mean squared error (RMSE), prints it, and makes a scatter plot of the predicted versus actual gestational age with the RMSE shown on the plot.
+
+You can save the following code in a file (e.g., model_fit.R) and run it in R.
+
+------------------------------------------------------------
+# Load required libraries
+library(glmnet)
+library(ggplot2)
+
+#------------------------------------------------------------------------------
+# 1. Read and reformat the training data
+#    - The training feature file (df_training.csv) has features in rows 
+#      and samples in columns. The first column holds the feature names.
+#    - We set the row names to the feature names, remove that column, 
+#      then transpose so that rows become samples.
+#------------------------------------------------------------------------------
+train_feat <- read.csv("df_training.csv", stringsAsFactors = FALSE, check.names = FALSE)
+rownames(train_feat) <- train_feat[, 1]        # first column: feature names
+train_feat <- train_feat[, -1]                 # remove the feature names column
+train_feat_t <- as.data.frame(t(train_feat))   # now each row is a sample
+train_feat_t$Sample_ID <- rownames(train_feat_t)  # add Sample_ID column
+
+# Read the training metadata (ano_training.csv) which includes Sample_ID and GA
+train_meta <- read.csv("ano_training.csv", stringsAsFactors = FALSE)
+
+# Merge the metadata with the features by Sample_ID
+train_data <- merge(train_meta, train_feat_t, by = "Sample_ID")
+
+#------------------------------------------------------------------------------
+# 2. Read and reformat the test data (similar steps as for training)
+#------------------------------------------------------------------------------
+test_feat <- read.csv("df_test.csv", stringsAsFactors = FALSE, check.names = FALSE)
+rownames(test_feat) <- test_feat[, 1]
+test_feat <- test_feat[, -1]
+test_feat_t <- as.data.frame(t(test_feat))
+test_feat_t$Sample_ID <- rownames(test_feat_t)
+
+test_meta <- read.csv("ano_test.csv", stringsAsFactors = FALSE)
+test_data <- merge(test_meta, test_feat_t, by = "Sample_ID")
+
+#------------------------------------------------------------------------------
+# 3. Prepare predictor matrices and response vectors for training and test sets
+#    - The outcome variable (gestational age) is assumed to be in the column 'GA'
+#    - Only methylation feature data (all columns except Sample_ID and GA) is used
+#------------------------------------------------------------------------------
+predictor_cols <- setdiff(names(train_data), c("Sample_ID", "GA"))
+X_train <- as.matrix(train_data[, predictor_cols])
+y_train <- train_data$GA
+
+X_test <- as.matrix(test_data[, predictor_cols])
+y_test <- test_data$GA
+
+#------------------------------------------------------------------------------
+# 4. Fit a predictive model using LASSO via glmnet (with cross-validation)
+#------------------------------------------------------------------------------
+set.seed(123)  # for reproducibility
+cvfit <- cv.glmnet(X_train, y_train, alpha = 1)  # alpha = 1 gives the LASSO penalty
+best_lambda <- cvfit$lambda.min
+
+#------------------------------------------------------------------------------
+# 5. Predict on the test set and calculate RMSE
+#------------------------------------------------------------------------------
+y_pred <- predict(cvfit, newx = X_test, s = "lambda.min")
+y_pred <- as.numeric(y_pred)  # convert prediction to a numeric vector
+
+rmse <- sqrt(mean((y_test - y_pred)^2))
+print(paste("Test RMSE:", round(rmse, 2)))
+
+#------------------------------------------------------------------------------
+# 6. Generate a scatter plot of predicted vs actual gestational age and annotate the RMSE
+#------------------------------------------------------------------------------
+df_plot <- data.frame(Actual = y_test, Predicted = y_pred)
+
+scatter_plot <- ggplot(df_plot, aes(x = Actual, y = Predicted)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "red") +
+  labs(x = "Actual Gestational Age", y = "Predicted Gestational Age",
+       title = "Predicted vs Actual Gestational Age") +
+  theme_minimal() +
+  # Place the RMSE annotation in the plot. Adjust x and y as needed.
+  annotate("text", x = min(df_plot$Actual), y = max(df_plot$Predicted),
+           label = paste("RMSE =", round(rmse, 2)), hjust = 0, color = "blue")
+
+print(scatter_plot)
+------------------------------------------------------------
+
+Notes:
+• The code assumes that your training metadata file (ano_training.csv) and test metadata file (ano_test.csv) each contain at least two columns: Sample_ID and GA.
+• Only the methylation features are used as predictors (i.e. no other metadata variables are added aside from the outcome GA).
+• Because the feature files are very high–dimensional (~400,000 features), using regular linear regression would not work well. The glmnet package’s penalized regression (here LASSO) is a common choice in such settings.
+• You may need to adjust file paths or other parameters based on your actual data and computing environment.
+
+This script should perform the required tasks: eventually printing the RMSE and displaying a scatter plot of predicted versus actual gestational age with the RMSE included as an annotation.

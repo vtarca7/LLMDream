@@ -1,0 +1,78 @@
+Below is one complete example in R. In this example we use the GEOquery package to download the series‐matrix file for GSE149440, extract the expression data and phenotype (metadata), split the samples into training (when the metadata field “train:ch1” equals "1") and test (when “train:ch1” equals "0"), and then we build a prediction model for gestational age (from the “gestational age:ch1” field) using LASSO regression (via glmnet). Finally, we predict on the test samples, compute the RMSE, and plot the predicted versus actual gestational ages.
+
+Before you run the code, make sure you have installed the required packages (GEOquery and glmnet). You can install them with:
+
+  install.packages("glmnet")
+  if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+  BiocManager::install("GEOquery")
+
+Here is the complete R script:
+
+------------------------------------------------------------
+# Load required libraries
+library(GEOquery)
+library(glmnet)
+
+# Download the GEO dataset GSE149440 (as a list of ExpressionSets)
+gse_list <- getGEO("GSE149440", GSEMatrix = TRUE)
+# If multiple platforms are present, take the first one
+if(length(gse_list) > 1){
+  gse <- gse_list[[1]]
+} else {
+  gse <- gse_list[[1]]
+}
+
+# Extract the expression data and phenotype (metadata)
+expr_matrix <- exprs(gse)
+pheno_data <- pData(gse)
+
+# (Optional) Check out the column names to verify the names of the metadata variables.
+# Uncomment the next line to see all variable names.
+# print(names(pheno_data))
+
+# Extract indices for training and test samples based on the metadata variable "train:ch1"
+# (Samples with train:ch1 == "1" are for training, and those with "0" for testing)
+train_idx <- which(pheno_data$`train:ch1` == "1")
+test_idx  <- which(pheno_data$`train:ch1` == "0")
+
+# Extract the response variable (gestational age) for training and test samples.
+# Since these values may be stored as factors or characters, we convert them to numeric.
+y_train <- as.numeric(as.character(pheno_data$`gestational age:ch1`[train_idx]))
+y_test  <- as.numeric(as.character(pheno_data$`gestational age:ch1`[test_idx]))
+
+# The expression matrix has genes as rows and samples as columns.
+# For modeling with glmnet the rows should correspond to samples and columns to features.
+X_train <- t(expr_matrix[, train_idx])
+X_test  <- t(expr_matrix[, test_idx])
+
+# Fit a LASSO regression model (alpha = 1) using cross-validation to select the best lambda.
+set.seed(123)  # for reproducibility
+cv_fit <- cv.glmnet(x = X_train, y = y_train, alpha = 1)
+best_lambda <- cv_fit$lambda.min
+
+# Use the selected lambda to predict gestational age on the test set.
+pred_test <- predict(cv_fit, s = best_lambda, newx = X_test)
+
+# Calculate the Root Mean Squared Error (RMSE) on the test set.
+rmse_value <- sqrt(mean((pred_test - y_test)^2))
+cat("Test RMSE:", round(rmse_value, 2), "\n")
+
+# Generate a scatter plot of predicted vs actual gestational age values for the test set.
+plot(y_test, pred_test,
+     xlab = "Actual Gestational Age",
+     ylab = "Predicted Gestational Age",
+     main = "Predicted vs Actual Gestational Age (Test Set)",
+     pch = 19, col = "blue")
+abline(0, 1, col = "red", lwd = 2)
+
+------------------------------------------------------------
+
+How the code works:
+1. It downloads the dataset from GEO and extracts both the expression data (with tens of thousands of genes) and the metadata.
+2. It splits the samples into training and test sets using the “train:ch1” field.
+3. It fits a LASSO regression (using glmnet’s cross-validation to pick the penalty parameter).
+4. It computes the RMSE on the test set and prints it.
+5. It produces a scatter plot comparing the actual and predicted gestational age values for the test samples (with the 45° red line for reference).
+
+You can run this script in your R console or RStudio. Make sure you are connected to the Internet for the download step, and the GEO dataset is accessible.

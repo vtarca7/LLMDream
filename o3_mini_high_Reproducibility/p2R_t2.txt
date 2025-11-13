@@ -1,0 +1,72 @@
+Below is one complete R script that reads in your training and test data (both the methylation features and the corresponding metadata), transposes the feature data so that each row is a sample (with columns as the 400K features), fits a LASSO regression (via glmnet) to predict gestational age (GA), computes the test-set RMSE, and makes a scatter plot of predicted versus actual GA with the RMSE shown in the legend. (Make sure that the metadata files contain a column named “Sample_ID” to link to the feature data and a column “GA” for the gestational age.)
+
+------------------------------------------------
+# Load necessary package
+library(glmnet)
+
+# Set a seed for reproducibility
+set.seed(123)
+
+### 1. Read and prepare the training data ###
+# Read training features; first column is the feature names, and the remaining columns are samples
+df_train <- read.csv("df_training.csv", header = TRUE, check.names = FALSE)
+# Use the first column as row names and remove it from the data frame
+rownames(df_train) <- df_train[,1]
+df_train <- df_train[,-1]
+
+# Since the file has features as rows and samples as columns,
+# transpose the data so that rows = samples and columns = features
+train_mat <- t(as.matrix(df_train))
+
+# Read training metadata which contains Sample_ID and GA (gestational age)
+meta_train <- read.csv("ano_training.csv", header = TRUE)
+
+# Match the metadata order to the order of samples in the feature matrix
+meta_train_ordered <- meta_train[match(rownames(train_mat), meta_train$Sample_ID), ]
+# Extract the response variable – ensure the metadata has a column named "GA"
+y_train <- meta_train_ordered$GA
+
+### 2. Read and prepare the test data ###
+df_test <- read.csv("df_test.csv", header = TRUE, check.names = FALSE)
+rownames(df_test) <- df_test[,1]
+df_test <- df_test[,-1]
+test_mat <- t(as.matrix(df_test))
+
+meta_test <- read.csv("ano_test.csv", header = TRUE)
+meta_test_ordered <- meta_test[match(rownames(test_mat), meta_test$Sample_ID), ]
+y_test <- meta_test_ordered$GA
+
+### 3. Fit a predictive model using glmnet (LASSO) ###
+# Due to the very high number of predictors compared to samples, a penalized regression method (LASSO) is appropriate.
+# cv.glmnet automatically performs cross-validation to select the best lambda.
+cvfit <- cv.glmnet(x = as.matrix(train_mat), y = y_train, alpha = 1, standardize = TRUE, nfolds = 10)
+
+# Use the best lambda value (lambda.min) for prediction
+predictions <- predict(cvfit, newx = as.matrix(test_mat), s = "lambda.min")
+
+### 4. Compute RMSE on the test set ###
+rmse <- sqrt(mean((predictions - y_test)^2))
+print(paste("Test RMSE:", round(rmse, 2)))
+
+### 5. Generate scatter plot of predicted vs actual GA and add RMSE in the legend ###
+plot(y_test, predictions,
+     xlab = "Actual Gestational Age",
+     ylab = "Predicted Gestational Age",
+     main = "Predicted vs Actual Gestational Age for Test Set",
+     pch = 19,
+     col = "blue")
+# Add the identity line (perfect prediction reference)
+abline(a = 0, b = 1, lwd = 2, col = "red")
+
+# Place a legend in the top left with the RMSE
+legend("topleft", legend = paste("RMSE =", round(rmse, 2)), bty = "n")
+
+------------------------------------------------
+
+Notes:
+• The script assumes that in both df_training.csv and df_test.csv the first column contains feature names and the remaining columns (with headers matching Sample_ID values) contain sample measurements.
+• Only the methylation feature data is used for model fitting.
+• The glmnet function standardizes predictors by default (here explicitly set with standardize = TRUE), which is usually important when using LASSO.
+• Adjust file paths or column names if your actual data files differ.
+
+Running this code in R should print the test RMSE and produce a scatter plot with the RMSE included in the legend.

@@ -1,0 +1,128 @@
+Below is one complete R script that reads in the species‐abundance and metadata files, restricts the data to the “last” specimen per participant (using the highest collect_wk below a given threshold), keeps only microbial features measured in both training and validation sets, fits a penalized logistic regression using glmnet, and then evaluates the model by printing the AUC and plotting an ROC curve. (In the code below we show the analysis first for the PTB outcome defined as delivery_wk < 37 using samples with collect_wk < 32, and then for EarlyPTB defined as delivery_wk < 32 using samples with collect_wk < 28.) 
+
+Make sure that the following files are in your working directory:
+  • training_species_abundance.csv  
+  • validation_species_abundance.csv  
+  • training_metadata.csv  
+  • validation_metadata.csv  
+
+Also, install any missing packages (dplyr, glmnet, pROC) before running the code.
+
+------------------------------------------------------------
+# R Code Begins Here
+
+# Load necessary packages
+library(dplyr)
+library(glmnet)
+library(pROC)
+
+# 1. Read in the data and merge feature data with metadata by specimen
+train_features <- read.csv("training_species_abundance.csv", stringsAsFactors = FALSE)
+train_meta     <- read.csv("training_metadata.csv", stringsAsFactors = FALSE)
+train_data     <- merge(train_meta, train_features, by = "specimen")
+
+val_features   <- read.csv("validation_species_abundance.csv", stringsAsFactors = FALSE)
+val_meta       <- read.csv("validation_metadata.csv", stringsAsFactors = FALSE)
+val_data       <- merge(val_meta, val_features, by = "specimen")
+
+# 2. Identify the microbial feature columns that are common to both datasets.
+# (Assuming that the metadata columns are: specimen, participant_id, collect_wk, delivery_wk)
+meta_cols <- c("specimen", "participant_id", "collect_wk", "delivery_wk")
+common_features <- intersect(setdiff(names(train_data), meta_cols),
+                             setdiff(names(val_data), meta_cols))
+
+# ---------------------------
+# PTB Analysis: Outcome = delivery_wk < 37, using the last specimen (highest collect_wk) with collect_wk < 32.
+# ---------------------------
+
+# Define PTB outcome (1 = PTB, 0 = term)
+train_data$PTB <- ifelse(train_data$delivery_wk < 37, 1, 0)
+val_data$PTB   <- ifelse(val_data$delivery_wk < 37, 1, 0)
+
+# Restrict to specimens with collect_wk < 32 and then for each participant choose the one 
+# with the highest collect_wk value (i.e. the last specimen meeting the criterion)
+train_ptb <- train_data %>%
+  filter(collect_wk < 32) %>%
+  group_by(participant_id) %>%
+  slice_max(collect_wk, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+val_ptb <- val_data %>%
+  filter(collect_wk < 32) %>%
+  group_by(participant_id) %>%
+  slice_max(collect_wk, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+# Prepare the design matrices using only the common microbial features
+x_train_ptb <- as.matrix(train_ptb[, common_features])
+y_train_ptb <- train_ptb$PTB
+
+x_val_ptb   <- as.matrix(val_ptb[, common_features])
+y_val_ptb   <- val_ptb$PTB
+
+# Fit a penalized logistic regression (LASSO) model with cross-validation
+set.seed(123)
+cvfit_ptb <- cv.glmnet(x_train_ptb, y_train_ptb, family = "binomial", type.measure = "auc")
+
+# Obtain predicted probabilities on the validation (test) set using the lambda that yields minimum error
+pred_prob_ptb <- predict(cvfit_ptb, newx = x_val_ptb, s = "lambda.min", type = "response")
+
+# Compute ROC and AUC using pROC
+roc_ptb <- roc(y_val_ptb, as.vector(pred_prob_ptb))
+cat("PTB Model AUC:", roc_ptb$auc, "\n")
+
+# Plot ROC curve for the PTB model
+plot(roc_ptb, main = paste("PTB ROC Curve (AUC =", round(roc_ptb$auc, 3), ")"))
+
+# ---------------------------
+# EarlyPTB Analysis: Outcome = delivery_wk < 32, using the last specimen (highest collect_wk) with collect_wk < 28.
+# ---------------------------
+
+# Define EarlyPTB outcome (1 = early PTB, 0 = otherwise)
+train_data$EarlyPTB <- ifelse(train_data$delivery_wk < 32, 1, 0)
+val_data$EarlyPTB   <- ifelse(val_data$delivery_wk < 32, 1, 0)
+
+# Restrict to specimens with collect_wk < 28 and select, for each participant, the record with the highest collect_wk
+train_ep <- train_data %>%
+  filter(collect_wk < 28) %>%
+  group_by(participant_id) %>%
+  slice_max(collect_wk, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+val_ep <- val_data %>%
+  filter(collect_wk < 28) %>%
+  group_by(participant_id) %>%
+  slice_max(collect_wk, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+# Create design matrices using the common features
+x_train_ep <- as.matrix(train_ep[, common_features])
+y_train_ep <- train_ep$EarlyPTB
+
+x_val_ep   <- as.matrix(val_ep[, common_features])
+y_val_ep   <- val_ep$EarlyPTB
+
+# Fit a penalized logistic regression model (using cv.glmnet) for EarlyPTB
+set.seed(123)
+cvfit_ep <- cv.glmnet(x_train_ep, y_train_ep, family = "binomial", type.measure = "auc")
+
+# Predict on validation set
+pred_prob_ep <- predict(cvfit_ep, newx = x_val_ep, s = "lambda.min", type = "response")
+
+# Compute ROC and AUC for the EarlyPTB model
+roc_ep <- roc(y_val_ep, as.vector(pred_prob_ep))
+cat("EarlyPTB Model AUC:", roc_ep$auc, "\n")
+
+# Plot ROC curve for the EarlyPTB model
+plot(roc_ep, main = paste("EarlyPTB ROC Curve (AUC =", round(roc_ep$auc, 3), ")"))
+
+------------------------------------------------------------
+# End of Script
+
+Explanation of key steps:
+1. The code first merges each species‐abundance CSV with its matching metadata (using the “specimen” column) and then defines the binary outcomes.
+2. To ensure the same features are used in both training and validation, only those feature columns that are present in both merged datasets are retained.
+3. For the PTB analysis the code filters all samples with collect_wk < 32 and then, for every subject (participant_id), selects the observation with the highest (latest) collect_wk. The EarlyPTB analysis is analogous except that we use only samples with collect_wk < 28.
+4. Glmnet is used to fit a logistic regression model with LASSO regularization. We use cross‐validation to choose the best penalty (lambda). The models are then evaluated on the test (validation) set with the AUC printed and the ROC curve plotted.
+
+You can run this script in R, and it should provide both sets of results and plots for your PTB and EarlyPTB prediction models.

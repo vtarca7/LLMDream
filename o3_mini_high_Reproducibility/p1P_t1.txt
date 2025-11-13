@@ -1,0 +1,188 @@
+Below is one complete Python script that downloads GSE149440 using GEOparse, extracts the gene‐expression and metadata (including “gestational age:ch1” and “train:ch1”), uses only the training samples (train:ch1=="1") to fit a regularized linear model (here LassoCV inside a pipeline after scaling the features), applies it onto the test samples (train:ch1=="0"), prints the test RMSE and makes a scatter‐plot of predicted versus actual gestational age. (Make sure to install the required packages “GEOparse”, “pandas”, “scikit‐learn” and “matplotlib” before running the code.)
+
+------------------------------------------------------------
+#!/usr/bin/env python3
+"""
+This script downloads the GEO dataset GSE149440, extracts for each sample:
+  • the gene expression data (tens of thousands of gene measurements; one value per probe)
+  • the metadata variables “gestational age:ch1” (the target) and “train:ch1” (which tells us whether the sample is in the training set or test set).
+
+It then fits a prediction model to the training samples (train:ch1 == "1") to predict gestational age and evaluates the model on the test set (train:ch1 == "0") by computing the root mean squared error (RMSE). Finally, it plots predicted versus actual gestational age values.
+"""
+
+import os
+import re
+import numpy as np
+import pandas as pd
+import GEOparse
+import matplotlib.pyplot as plt
+
+from sklearn.linear_model import LassoCV
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_squared_error
+
+def parse_numeric(s):
+    """
+    Given a string that may contain extra text (e.g. "gestational age: 25 weeks"),
+    try to extract the first numeric value as float.
+    """
+    try:
+        return float(s)
+    except ValueError:
+        # Use a regular expression to find a numeric substring
+        m = re.search(r"[\d\.]+", s)
+        if m:
+            return float(m.group())
+    return np.nan
+
+def build_sample_dict(gsm):
+    """
+    Given a GEO sample (GSM) object, extracts:
+      - the target variable (gestational age from metadata field 'gestational age:ch1'),
+      - the train/test indicator (from metadata field 'train:ch1'),
+      - the gene expression profile (each row in gsm.table contains a probe).
+    Returns a dictionary with keys for the metadata and one key per gene/probe.
+    """
+    record = {}
+    record["gsm"] = gsm.name  # sample name
+
+    # Get metadata from the sample. In GEO series matrix files the metadata fields are stored as lists.
+    # We assume that the keys in gsm.metadata include exactly:
+    #    "gestational age:ch1" (target) and "train:ch1" (indicator)
+    meta = gsm.metadata
+
+    # Extract gestational age from the metadata (it might be a list with one element)
+    if "gestational age:ch1" in meta:
+        record["gestational_age"] = parse_numeric(meta["gestational age:ch1"][0])
+    else:
+        record["gestational_age"] = np.nan
+
+    # Extract train set indicator (as a string; expected to be "1" or "0")
+    if "train:ch1" in meta:
+        record["train"] = meta["train:ch1"][0].strip()
+    else:
+        record["train"] = None
+
+    # Now extract the gene expression values.
+    # Each GSM object (from a series matrix file) carries a table, which should have columns "ID_REF" (gene/probe id)
+    # and "VALUE" (expression). We iterate over the rows to extract these values.
+    expr_dict = {}
+    if hasattr(gsm, "table") and gsm.table is not None:
+        # Loop over rows of the sample’s expression table.
+        # Note: Depending on how the series matrix was built, the table ordering should be the same across samples.
+        for _, row in gsm.table.iterrows():
+            probe = row["ID_REF"]
+            try:
+                value = float(row["VALUE"])
+            except ValueError:
+                value = np.nan
+            expr_dict[probe] = value
+    else:
+        print(f"Warning: Sample {gsm.name} has no expression table.")
+    record.update(expr_dict)
+    return record
+
+def main():
+    # Create a directory for GEOparse to store files if needed.
+    dest_dir = "./GEO_data"
+    os.makedirs(dest_dir, exist_ok=True)
+
+    print("Downloading GEO dataset GSE149440. This may take several minutes ...")
+    # Download the series matrix file for GSE149440.
+    # The "how='quick'" option downloads the parsed series matrix file.
+    gse = GEOparse.get_GEO(geo="GSE149440", destdir=dest_dir, how="quick")
+
+    print("Processing samples ...")
+    data_list = []
+    for gsm_name, gsm in gse.gsms.items():
+        record = build_sample_dict(gsm)
+        data_list.append(record)
+    print(f"Total samples processed: {len(data_list)}")
+
+    # Build a dataframe: each row corresponds to one sample.
+    df = pd.DataFrame(data_list)
+    
+    # Check that the required metadata columns exist.
+    if "gestational_age" not in df.columns or "train" not in df.columns:
+        raise ValueError("One or both required metadata columns ('gestational_age' and 'train') are missing.")
+
+    # (Optional) Report counts for training and test groups.
+    print("Number of training samples (train:ch1 == '1'): {}"
+          .format((df["train"] == "1").sum()))
+    print("Number of test samples (train:ch1 == '0'): {}"
+          .format((df["train"] == "0").sum()))
+
+    # Create separate dataframes for training and test samples.
+    df_train = df[df["train"] == "1"].copy()
+    df_test = df[df["train"] == "0"].copy()
+
+    # Define predictor feature columns: these are all columns except the metadata.
+    meta_cols = {"gsm", "gestational_age", "train"}
+    feature_cols = [col for col in df.columns if col not in meta_cols]
+
+    print(f"Number of gene expression features: {len(feature_cols)}")
+
+    # Make sure the feature columns are numeric (if needed, convert them)
+    X_train = df_train[feature_cols].apply(pd.to_numeric, errors='coerce')
+    X_test = df_test[feature_cols].apply(pd.to_numeric, errors='coerce')
+    # Fill in missing values if any (for example, with zero)
+    X_train = X_train.fillna(0)
+    X_test = X_test.fillna(0)
+
+    # The target variable is gestational_age (already converted to float by our parser)
+    y_train = df_train["gestational_age"].astype(float)
+    y_test  = df_test["gestational_age"].astype(float)
+
+    # Fit a prediction model.
+    # We use a pipeline that first standardizes the features and then fits Lasso with 5-fold CV.
+    # (Regularization and feature selection is important when using tens of thousands of genes with few samples.)
+    model = make_pipeline(StandardScaler(), LassoCV(cv=5, random_state=42, max_iter=10000))
+    print("Training model ...")
+    model.fit(X_train, y_train)
+
+    # Apply the model to the test set.
+    y_pred = model.predict(X_test)
+
+    # Compute RMSE on test set.
+    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+    print("Test RMSE: {:.3f}".format(rmse))
+
+    # Generate scatter plot: Predicted vs Actual gestational age.
+    plt.figure(figsize=(6,6))
+    plt.scatter(y_test, y_pred, alpha=0.7, edgecolor='k')
+    plt.xlabel("Actual Gestational Age")
+    plt.ylabel("Predicted Gestational Age")
+    plt.title("Predicted vs Actual Gestational Age (Test Set)")
+
+    # Plot y=x line
+    min_val = min(y_test.min(), y_pred.min())
+    max_val = max(y_test.max(), y_pred.max())
+    plt.plot([min_val, max_val], [min_val, max_val], "r--", lw=2, label="y = x")
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+if __name__ == '__main__':
+    main()
+
+------------------------------------------------------------
+
+Explanation of key steps:
+
+1. The script uses GEOparse.get_GEO("GSE149440", …) to download the parsed series‐matrix file.
+2. For each sample object (gsm), the helper function build_sample_dict extracts
+   • the target (parsing “gestational age:ch1”),
+   • the training indicator (“train:ch1”),
+   • and creates a mapping of probe/gene ID → expression value (from gsm.table).
+3. All samples are combined into a pandas DataFrame. The feature columns (gene expression)
+   are defined as all columns except the metadata (“gsm”, “gestational_age”, “train”).
+4. Only samples with train=="1" are used for training and those with train=="0" form the test set.
+5. A machine‐learning pipeline (StandardScaler followed by LassoCV) is fitted on the training data.
+6. The model’s predictions on the test set are compared against the true gestational age values
+   using RMSE, and a scatter plot of predicted vs actual values is generated.
+
+Before running the code, install the required packages (if not already installed) for example by executing:
+    pip install GEOparse scikit-learn matplotlib pandas
+
+This solution should serve as a good starting point for analyzing GEO data for predictive modeling.
